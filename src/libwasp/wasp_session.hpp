@@ -4,6 +4,7 @@
 #include "wasp_crypto.hpp"
 #include "wasp_defs.hpp"
 
+
 namespace wasp {
 
     enum class Role { CLIENT, SERVER };

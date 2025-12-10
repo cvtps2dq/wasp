@@ -4,6 +4,7 @@
 #include "wasp_session.hpp"
 #include <iostream>
 #include <sstream>
+#include <ctime>
 
 namespace wasp {
 
