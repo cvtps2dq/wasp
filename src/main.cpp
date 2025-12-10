@@ -444,6 +444,7 @@ int main(int argc, char **argv) {
     run_command(std::format("sudo ifconfig {} 10.0.0.1 10.0.0.2 up", tun_name));
 #elif defined(__linux__)
       run_command(std::format("sudo ip addr add 10.89.89.1/24 dev {} && sudo ip link set {} up", tun_name, tun_name));
+      run_command(std::format("sudo ethtool -K {} tx off", tun_name));
 #endif
   }
 
