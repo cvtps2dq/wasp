@@ -338,45 +338,37 @@ static int callback_wasp(struct lws *wsi, enum lws_callback_reasons reason,
 
   case LWS_CALLBACK_CLIENT_WRITEABLE:
   case LWS_CALLBACK_SERVER_WRITEABLE: {
-    // 1. Handle Handshake Messages (Text)
-    if (!pss->handshake_tx_queue.empty()) {
-      auto &msg = pss->handshake_tx_queue.front();
-      // Create temp buffer with padding for LWS
-      std::vector<unsigned char> buf(LWS_PRE + msg.size());
-      memcpy(buf.data() + LWS_PRE, msg.data(), msg.size());
-
-      lws_write(wsi, buf.data() + LWS_PRE, msg.size(), LWS_WRITE_TEXT);
-      pss->handshake_tx_queue.pop();
-
-      if (!pss->handshake_tx_queue.empty())
-        lws_callback_on_writable(wsi);
-      break; // Prioritize handshake, come back for binary later
-    }
-
-    // 2. Handle Encrypted Data (Binary) -> THIS WAS THE BUGGY PART
-    if (!pss->encrypted_tx_queue.empty()) {
-      auto &packet = pss->encrypted_tx_queue.front();
-
-      // build_data_packet ALREADY adds LWS_PRE padding internally.
-      // So we write from data() + LWS_PRE.
-
-      std::cout << "[LWS] Writing " << packet.size()
-                << " encrypted bytes to network.\n";
-      int ret = lws_write(wsi, packet.data() + LWS_PRE, packet.size() - LWS_PRE,
-                          LWS_WRITE_BINARY);
-
-      if (ret < 0)
-        return -1; // Write failed/connection closed
-
-      pss->encrypted_tx_queue.pop();
-
-      // If there are more packets queued, request another write slot
-      // immediately
-      if (!pss->encrypted_tx_queue.empty()) {
-        lws_callback_on_writable(wsi);
+      // 1. Priority: Handshake
+      if (!pss->handshake_tx_queue.empty()) {
+          auto& msg = pss->handshake_tx_queue.front();
+          std::vector<unsigned char> buf(LWS_PRE + msg.size());
+          memcpy(buf.data() + LWS_PRE, msg.data(), msg.size());
+          lws_write(wsi, buf.data() + LWS_PRE, msg.size(), LWS_WRITE_TEXT);
+          pss->handshake_tx_queue.pop();
+          if (!pss->handshake_tx_queue.empty()) lws_callback_on_writable(wsi);
+          break;
       }
-    }
-    break;
+
+      // 2. Data: FLUSH the queue (Don't just send one!)
+      while (!pss->encrypted_tx_queue.empty()) {
+          auto& packet = pss->encrypted_tx_queue.front();
+
+          // Attempt write
+          int ret = lws_write(wsi, packet.data() + LWS_PRE, packet.size() - LWS_PRE, LWS_WRITE_BINARY);
+
+          // Handle Error
+          if (ret < 0) return -1;
+
+          // Pop the packet we just sent
+          pss->encrypted_tx_queue.pop();
+
+          // If socket is full, stop and wait for next callback
+          if (lws_send_pipe_choked(wsi)) {
+              lws_callback_on_writable(wsi); // Request callback when space is available
+              break;
+          }
+      }
+      break;
   }
   case LWS_CALLBACK_EVENT_WAIT_CANCELLED: {
     CryptoResult result;
