@@ -136,30 +136,36 @@ ssize_t tun_write(int fd, const void *buf, size_t count) {
     perror("[TUN ERROR] Write failed");
   return ret;
 }
+
 #elif defined(__linux__)
+
 int tun_alloc(char *dev_name) {
-  struct ifreq ifr;
-  int fd = open("/dev/net/tun", O_RDWR);
-  if (fd < 0)
-    return -1;
-  memset(&ifr, 0, sizeof(ifr));
-  ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
-  if (*dev_name)
-    strncpy(ifr.ifr_name, dev_name, IFNAMSIZ);
-  if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0) {
-    close(fd);
-    return -1;
-  }
-  strcpy(dev_name, ifr.ifr_name);
-  return fd;
+    struct ifreq ifr;
+    int fd = open("/dev/net/tun", O_RDWR);
+    if (fd < 0) return -1;
+
+    memset(&ifr, 0, sizeof(ifr));
+    // IFF_NO_PI is crucial here. It tells Linux "Don't send/expect protocol info headers"
+    ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
+
+    if (*dev_name) strncpy(ifr.ifr_name, dev_name, IFNAMSIZ);
+    if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0) { close(fd); return -1; }
+    strcpy(dev_name, ifr.ifr_name);
+    return fd;
 }
-ssize_t tun_read(int fd, void *buf, size_t count) {
-  return read(fd, buf, count);
+
+// Linux: Read/Write RAW IP data directly.
+ssize_t tun_read(int fd, void* buf, size_t count) {
+    return read(fd, buf, count);
 }
-ssize_t tun_write(int fd, const void *buf, size_t count) {
-  return write(fd, buf, count);
+
+ssize_t tun_write(int fd, const void* buf, size_t count) {
+    return write(fd, buf, count);
 }
+
 #endif
+
+
 
 std::string get_dst_ip(wasp::ByteSpan packet) {
   if (packet.size() < sizeof(struct ip))
@@ -435,8 +441,10 @@ int main(int argc, char **argv) {
   if (is_server)
     strcpy(tun_name, "wasp0");
   app.tun_fd = tun_alloc(tun_name);
-  if (app.tun_fd < 0)
-    return 1;
+    if (app.tun_fd < 0) {
+        perror("[CRITICAL] Failed to allocate TUN interface");
+        return 1;
+    }
   std::cout << "[INIT] Interface " << tun_name << " created.\n";
 
   if (is_server) {
