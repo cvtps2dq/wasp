@@ -283,10 +283,9 @@ static int callback_wasp(struct lws *wsi, enum lws_callback_reasons reason,
           pss->virtual_ip = pss->session.get_assigned_ip();
           std::cout << "\n[WASP] Handshake Complete! Tunnel ESTABLISHED. IP: "
                     << pss->virtual_ip << "\n";
-          std::string cmd = std::format("sudo ifconfig {} {} 10.0.0.1 up",
-                                        pss->tun_iface_name, pss->virtual_ip);
-          run_command(cmd);
-          std::cout << "\n[WASP] Ready. Ping 10.0.0.1\n" << std::endl;
+            std::string cmd = std::format("sudo ifconfig {} {} 10.89.89.1 up", pss->tun_iface_name, pss->virtual_ip);
+            run_command(cmd);
+            std::cout << "\n[WASP] Ready. Ping 10.89.89.1\n" << std::endl;
         }
       } catch (const std::exception &) {
         return -1;
@@ -452,9 +451,7 @@ int main(int argc, char **argv) {
 #if defined(__APPLE__)
     run_command(std::format("sudo ifconfig {} 10.0.0.1 10.0.0.2 up", tun_name));
 #elif defined(__linux__)
-    run_command(std::format(
-        "sudo ip addr add 10.0.0.1/24 dev {} && sudo ip link set {} up",
-        tun_name, tun_name));
+      run_command(std::format("sudo ip addr add 10.89.89.1/24 dev {} && sudo ip link set {} up", tun_name, tun_name));
 #endif
   }
 

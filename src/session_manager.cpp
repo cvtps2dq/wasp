@@ -5,11 +5,8 @@
 
 // Thread-safe, endian-safe IP address generation.
 std::string make_ip_addr(const uint32_t index) {
-    constexpr uint8_t a = 10;
-    // 10.0.0.x
-    constexpr uint8_t b = 0;
-    constexpr uint8_t c = 0;
-    const auto d = static_cast<uint8_t>(index);
+    uint8_t a = 10, b = 89, c = 89;
+    uint8_t d = static_cast<uint8_t>(index);
 
     // Use a stack-allocated buffer and snprintf for thread safety.
     std::array<char, INET_ADDRSTRLEN> buffer{};
