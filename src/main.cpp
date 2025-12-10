@@ -236,8 +236,7 @@ void tun_reader_thread() {
         // Critical for Linux Servers due to offloading.
         if (app.session_manager.is_server()) {
             wasp::utils::fix_packet_checksums(packet_data.data(), nread);
-            // ===> LOG OUTGOING PACKET <===
-            wasp::utils::print_packet("SRV-TX", packet_data.data(), nread);
+            wasp::utils::print_packet("SRV-BSD", packet_data.data(), nread);
         }
 
         // 7. Routing & Session Lookup
