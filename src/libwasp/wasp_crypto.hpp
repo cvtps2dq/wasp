@@ -178,4 +178,28 @@ namespace wasp::crypto {
         out.resize(ret);
         return out;
     }
+
+    inline ByteBuffer hmac_sha256(ByteSpan key, ByteSpan data) {
+        // ERROR WAS HERE: Changed 'unsigned int' to 'size_t'
+        size_t len = EVP_MAX_MD_SIZE;
+
+        ByteBuffer out(len);
+
+        SslPtr<EVP_MAC> mac{EVP_MAC_fetch(nullptr, "HMAC", nullptr), EVP_MAC_free};
+        SslPtr<EVP_MAC_CTX> ctx{EVP_MAC_CTX_new(mac.get()), EVP_MAC_CTX_free};
+
+        OSSL_PARAM params[2];
+        params[0] = OSSL_PARAM_construct_utf8_string("digest", (char*)"SHA256", 0);
+        params[1] = OSSL_PARAM_construct_end();
+
+        if (EVP_MAC_init(ctx.get(), key.data(), key.size(), params) <= 0 ||
+            EVP_MAC_update(ctx.get(), data.data(), data.size()) <= 0 ||
+            // Now 'len' matches the expected size_t* signature
+            EVP_MAC_final(ctx.get(), out.data(), &len, out.capacity()) <= 0) {
+            throw std::runtime_error("HMAC generation failed");
+            }
+
+        out.resize(len);
+        return out;
+    }
 }

@@ -99,29 +99,59 @@ namespace wasp {
             // 2. Receive AUTH -> Verify -> Send READY
             else if (current_state_ == State::AUTHENTICATING && type == "AUTH") {
 
-                std::string iv_b64 = extract_json_field(json, "iv");
-                std::string payload_b64 = extract_json_field(json, "payload");
+        // Extract Fields
+        std::string iv_b64 = extract_json_field(json, "iv");
+        std::string payload_b64 = extract_json_field(json, "payload");
 
-                if (iv_b64.empty() || payload_b64.empty()) throw ProtocolError("Missing auth data");
+        // 1. Decrypt Outer Layer (AES-GCM)
+        ByteBuffer iv = crypto::base64_decode(iv_b64);
+        ByteBuffer cipher = crypto::base64_decode(payload_b64);
+        ByteBuffer plaintext = crypto::aes_gcm_decrypt(session_key_, iv, cipher); // Throws if key is wrong
 
-                // Decrypt the payload using the derived session key
-                ByteBuffer iv = crypto::base64_decode(iv_b64);
-                ByteBuffer cipher = crypto::base64_decode(payload_b64);
+        std::string plain_str(plaintext.begin(), plaintext.end());
 
-                // If this fails, it throws, connection closes (Good!)
-                ByteBuffer plaintext = crypto::aes_gcm_decrypt(session_key_, iv, cipher);
+        // 2. Parse Inner Auth JSON
+        std::string user = extract_json_field(plain_str, "user");
+        std::string timestamp_str = extract_json_field(plain_str, "ts");
+        std::string signature_b64 = extract_json_field(plain_str, "sig");
 
-                // TODO: Actual Credential Validation on 'plaintext' (e.g., check token)
-                // For now, we assume if they have the key, they are allowed (Anonymous Auth)
+        // 3. Anti-Replay: Check Timestamp
+        long long client_ts = std::stoll(timestamp_str);
+        long long server_ts = std::time(nullptr);
+        if (std::abs(server_ts - client_ts) > 10) { // 10 seconds window
+            throw ProtocolError("Replay Attack Detected: Timestamp expired");
+        }
 
-                current_state_ = State::ESTABLISHED;
+        // 4. Validate User
+        std::string stored_pass = get_password_for_user(user);
+        if (stored_pass.empty()) throw ProtocolError("Unknown User");
 
-                std::stringstream ss;
-                // session_id_ should have been set by the main server loop
-                ss << R"({ "type": "READY", "sid": ")" << session_id_
-                   << R"(", "assigned_ip": ")" << assigned_ip_ << "\" }";
-                return ss.str();
-            }
+        // 5. Anti-MitM: Verify HMAC
+        // We verify that the Client has the SAME shared secret as us,
+        // signed with the password we both know.
+
+        // Construct the data string exactly as the client did
+        std::string data_to_sign = base64_encode_session_key() + timestamp_str;
+
+        ByteBuffer expected_sig = crypto::hmac_sha256(
+            ByteSpan((uint8_t*)stored_pass.data(), stored_pass.size()),
+            ByteSpan((uint8_t*)data_to_sign.data(), data_to_sign.size())
+        );
+
+        ByteBuffer client_sig = crypto::base64_decode(signature_b64);
+
+        if (client_sig != expected_sig) {
+            // If this fails, either the password is wrong OR an ISP is intercepting keys.
+            throw ProtocolError("Authentication Failed: Invalid Signature (Possible MitM)");
+        }
+
+        // Success
+        current_state_ = State::ESTABLISHED;
+        std::stringstream ss;
+        ss << "{ \"type\": \"READY\", \"sid\": \"" << session_id_
+           << "\", \"assigned_ip\": \"" << assigned_ip_ << "\" }";
+        return ss.str();
+    }
         }
 
         // ---------------------------------------------------------
@@ -143,24 +173,40 @@ namespace wasp {
                 // Derive AES Key
                 derive_keys();
 
-                // Encrypt Credentials (Token/Pass)
-                std::string credentials = R"({ "token": "secret_password_123" })";
+                // 1. Timestamp
+                long long now = std::time(nullptr);
+                std::string ts_str = std::to_string(now);
 
-                std::array<uint8_t, IV_SIZE> iv{};
+                // 2. Generate Signature
+                // Sign (Shared_Secret + Timestamp) with Password
+                std::string data_to_sign = base64_encode_session_key() + ts_str;
+
+                ByteBuffer signature = crypto::hmac_sha256(
+                    ByteSpan((uint8_t*)password_.data(), password_.size()),
+                    ByteSpan((uint8_t*)data_to_sign.data(), data_to_sign.size())
+                );
+
+                // 3. Create JSON Payload
+                std::stringstream inner_json;
+                inner_json << "{ \"user\": \"" << username_ << "\", "
+                           << "\"ts\": \"" << ts_str << "\", "
+                           << "\"sig\": \"" << crypto::base64_encode(signature) << "\" }";
+
+                std::string inner_msg = inner_json.str();
+
+                // 4. Encrypt
+                std::array<uint8_t, IV_SIZE> iv;
                 crypto::random_bytes(iv);
-
-                // Encrypt using the fresh session key.
-                // Note: aes_gcm_encrypt returns [Cipher+Tag]
                 ByteBuffer encrypted_auth = crypto::aes_gcm_encrypt(
                     session_key_, iv,
-                    ByteSpan(reinterpret_cast<const uint8_t*>(credentials.data()), credentials.size())
+                    ByteSpan((uint8_t*)inner_msg.data(), inner_msg.size())
                 );
 
                 current_state_ = State::AUTHENTICATING;
 
                 std::stringstream ss;
-                ss << R"({ "type": "AUTH", "iv": ")" << crypto::base64_encode(iv)
-                   << R"(", "payload": ")" << crypto::base64_encode(encrypted_auth) << "\" }";
+                ss << "{ \"type\": \"AUTH\", \"iv\": \"" << crypto::base64_encode(iv)
+                   << "\", \"payload\": \"" << crypto::base64_encode(encrypted_auth) << "\" }";
                 return ss.str();
             }
 

@@ -10,6 +10,8 @@
 #include <iostream>
 #include <iomanip>
 
+#include "wasp_defs.hpp"
+
 namespace wasp::utils {
 
     // --- DEBUG: Print Packet Hex ---
@@ -108,5 +110,18 @@ namespace wasp::utils {
             if (result == 0) result = 0xFFFF;
             udp_hdr->uh_sum = result;
         }
+    }
+
+    inline std::string get_dst_ip(ByteSpan packet) {
+        if (packet.size() < sizeof(struct ip)) return "";
+
+        const struct ip* ip_header = reinterpret_cast<const struct ip*>(packet.data());
+
+        // Ensure IPv4
+        if (ip_header->ip_v != 4) return "";
+
+        char buffer[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(ip_header->ip_dst), buffer, INET_ADDRSTRLEN);
+        return std::string(buffer);
     }
 }

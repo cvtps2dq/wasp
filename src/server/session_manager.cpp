@@ -1,7 +1,7 @@
 #include "session_manager.hpp"
 #include <arpa/inet.h>
-#include <iostream>
 #include <array>
+#include <iostream>
 
 // Thread-safe, endian-safe IP address generation.
 std::string make_ip_addr(const uint32_t index) {

@@ -27,11 +27,11 @@
 #include <sys/sys_domain.h>
 #endif
 
-#include "session_manager.hpp"
-#include "wasp_crypto.hpp"
-#include "wasp_defs.hpp"
-#include "wasp_session.hpp"
-#include "worker_pool.hpp"
+#include "libwasp/wasp_crypto.hpp"
+#include "libwasp/wasp_defs.hpp"
+#include "libwasp/wasp_session.hpp"
+#include "libwasp/worker_pool.hpp"
+#include "server/session_manager.hpp"
 
 struct WaspSessionData {
   wasp::Session session;

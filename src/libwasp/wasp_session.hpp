@@ -1,8 +1,8 @@
 #pragma once
-#include "wasp_defs.hpp"
-#include "wasp_crypto.hpp"
-#include <string>
 #include <optional>
+#include <string>
+#include "wasp_crypto.hpp"
+#include "wasp_defs.hpp"
 
 namespace wasp {
 
@@ -37,6 +37,19 @@ namespace wasp {
         [[nodiscard]] Role get_role() const { return role_;}
         std::string get_assigned_ip() {return assigned_ip_;}
 
+        void set_credentials(std::string user, std::string password) {
+            username_ = std::move(user);
+            password_ = std::move(password);
+        }
+
+        // For Server Mode: Simple User Database (In-Memory)
+        // In production, move this to SessionManager or a DB
+        static std::string get_password_for_user(const std::string& user) {
+            // HARDCODED FOR DEMO
+            if (user == "admin") return "secret_password_123";
+            return ""; // User not found
+        }
+
     private:
         Role role_;
         State current_state_ = State::UNAUTHENTICATED;
@@ -48,10 +61,17 @@ namespace wasp {
         ByteBuffer session_key_;
         uint32_t session_id_ = 0;
 
+        std::string username_;
+        std::string password_;
+
         // Helpers
         void derive_keys();
         static std::string extract_json_field(std::string_view json, std::string_view key);
         std::string assigned_ip_;
+
+        std::string base64_encode_session_key() {
+            return crypto::base64_encode(session_key_);
+        }
     };
 
 }

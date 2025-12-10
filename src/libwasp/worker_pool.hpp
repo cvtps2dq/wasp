@@ -5,14 +5,16 @@
 #include <thread>
 #include <vector>
 #include <functional>
+#include <atomic> // Ensure this is included
 #include "wasp_defs.hpp"
 
+// ... CryptoTask and CryptoResult structs remain the same ...
 struct CryptoTask {
     bool is_encrypt;
     wasp::ByteBuffer data;
     uint32_t session_id;
     wasp::InnerCommand inner_cmd;
-    wasp::ByteBuffer session_key; // MUST be a copy for thread safety
+    wasp::ByteBuffer session_key;
     struct lws* wsi;
 };
 
@@ -26,13 +28,13 @@ template<typename T>
 class ThreadSafeQueue {
 public:
     void push(T value) {
-        std::lock_guard lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         q_.push(std::move(value));
         cond_.notify_one();
     }
 
     bool pop(T& value) {
-        std::unique_lock lock(mtx_);
+        std::unique_lock<std::mutex> lock(mtx_);
         cond_.wait(lock, [this]{ return !q_.empty() || stop_; });
         if (stop_ && q_.empty()) return false;
         value = std::move(q_.front());
@@ -40,9 +42,8 @@ public:
         return true;
     }
 
-    // ====> ADD THIS METHOD <====
     bool try_pop(T& value) {
-        std::lock_guard lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         if (q_.empty()) {
             return false;
         }
@@ -51,8 +52,15 @@ public:
         return true;
     }
 
+    // ===> ADD THIS METHOD <===
+    bool empty() {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return q_.empty();
+    }
+    // =========================
+
     void stop() {
-        std::lock_guard lock(mtx_);
+        std::lock_guard<std::mutex> lock(mtx_);
         stop_ = true;
         cond_.notify_all();
     }
@@ -64,17 +72,20 @@ private:
     bool stop_ = false;
 };
 
+// ... WorkerPool class remains the same ...
 class WorkerPool {
 public:
-    explicit WorkerPool(size_t num_threads);
+    WorkerPool(size_t num_threads);
     ~WorkerPool();
     void stop();
 
     void submit_task(CryptoTask task);
 
+    // Add context setter we discussed earlier if missing
+    void set_context(struct lws_context* ctx) { lws_ctx_ = ctx; }
+
     ThreadSafeQueue<CryptoTask> tasks;
     ThreadSafeQueue<CryptoResult> results;
-    void set_context(struct lws_context* ctx) { lws_ctx_ = ctx; }
 
 private:
     void worker_loop();
