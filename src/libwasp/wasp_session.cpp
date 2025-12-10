@@ -108,7 +108,9 @@ namespace wasp {
                 }
 
                 if (!credentials_validator_(user, pass)) {
-                    throw ProtocolError("Authentication Failed: Invalid Credentials");
+                    // CHANGE: Don't throw ProtocolError immediately.
+                    // Send a polite JSON error to the client so they know to stop trying.
+                    return "{ \"type\": \"ERROR\", \"msg\": \"Invalid Credentials\" }";
                 }
                 // ==================
 
@@ -175,6 +177,12 @@ namespace wasp {
                 current_state_ = State::ESTABLISHED;
 
                 return std::nullopt;
+            }
+
+            else if (type == "ERROR") {
+                std::string msg = extract_json_field(json, "msg");
+                // Throw the specific AuthError. The Client Main loop will catch this.
+                throw AuthError("Server Rejected: " + (msg.empty() ? "Unknown Error" : msg));
             }
         }
 

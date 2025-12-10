@@ -4,6 +4,7 @@
 #include <vector>
 #include <span>
 #include <stdexcept>
+#include <stdexcept>
 
 namespace wasp {
 
@@ -80,4 +81,9 @@ namespace wasp {
         InnerCommand cmd,
         ByteSpan ip_data
     );
+
+    class AuthError : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
 }

@@ -458,6 +458,16 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (command == "del") {
+        if (argc < 3) { std::cerr << "Missing username.\n"; return 1; }
+        if (app.db->delete_user(argv[2])) {
+            std::cout << "User " << argv[2] << " deleted.\n";
+        } else {
+            std::cerr << "User not found.\n";
+        }
+        return 0;
+    }
+
     if (command == "run")
     {
         print_banner();

@@ -103,6 +103,14 @@ namespace wasp::db {
             return true;
         }
 
+        bool delete_user(const std::string& username) {
+            auto count = storage_.count<User>(where(c(&User::username) == username));
+            if (count == 0) return false;
+
+            storage_.remove_all<User>(where(c(&User::username) == username));
+            return true;
+        }
+
         // --- Authentication ---
 
         // Returns true if password is correct AND user is approved

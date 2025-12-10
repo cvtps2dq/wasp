@@ -81,6 +81,8 @@ struct ClientContext {
     // === ADDED CONFIG FIELDS ===
     std::string config_username;
     std::string config_password;
+
+    std::atomic<bool> fatal_error{false};
 };
 
 ClientContext app;
@@ -231,7 +233,13 @@ static int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
                             run_command("sudo ip link set " + app.tun->get_name() + " up");
                         #endif
                     }
-                } catch (const std::exception& e) {
+                }
+                catch (const wasp::AuthError& e) {
+                    log(LogLevel::ERROR, std::string(Color::RED) + "FATAL AUTH ERROR: " + e.what());
+                    app.fatal_error = true; // Signal main loop to stop
+                    return -1; // Close connection
+                }
+                catch (const std::exception& e) {
                     log(LogLevel::ERROR, std::string("Handshake Error: ") + e.what());
                     return -1;
                 }
@@ -401,8 +409,13 @@ int main(int argc, char** argv) {
         while (app.running) {
             lws_service(app.lws_ctx, 100);
 
-            // Reconnection Logic
             if (!app.wsi && app.running) {
+                // === CHECK FATAL ERROR ===
+                if (app.fatal_error) {
+                    log(LogLevel::ERROR, "Fatal error occurred. Exiting.");
+                    break; // Exit the loop
+                }
+
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 log(LogLevel::INFO, "Reconnecting...");
                 lws_client_connect_via_info(&ccinfo);
