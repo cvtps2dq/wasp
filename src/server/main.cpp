@@ -74,7 +74,6 @@ __/\\\______________/\\\_____/\\\\\\\\\________/\\\\\\\\\\\____/\\\\\\\\\\\\\___
         ______\///____\///_______\///________\///____\///////////_____\///______________
          Web Augmented Secure Protocol Server v1.1 — cv2 — lumen-rsg                2025
     )" << Color::RESET << std::endl;
-    std::cout << "   " << Color::BOLD << "WebAugmentedSecureProtocol Server v1.0" << Color::RESET << "\n" << std::endl;
 }
 
 // ==========================================
