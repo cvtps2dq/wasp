@@ -122,24 +122,15 @@ ssize_t tun_read(int fd, void* buf, size_t capacity) {
 
     return nread - 4; // Return actual IP payload size
 }
-ssize_t tun_write(int fd, const void *buf, size_t count) {
-  // macOS utun usually expects Host Byte Order (Little Endian on M1/Intel)
-  // Sending htonl() (Big Endian) often causes the kernel to drop the packet as
-  // "Unknown Protocol"
-  uint32_t af_inet_header = AF_INET;
+ssize_t tun_write(int fd, const void* buf, size_t count) {
+    // Standard UTUN expects Network Byte Order (Big Endian)
+    uint32_t af = htonl(AF_INET);
 
-  std::vector<uint8_t> packet_with_header(4 + count);
-  memcpy(packet_with_header.data(), &af_inet_header, 4);
-  memcpy(packet_with_header.data() + 4, buf, count);
+    std::vector<uint8_t> p(4 + count);
+    memcpy(p.data(), &af, 4);
+    memcpy(p.data() + 4, buf, count);
 
-  // Debug log to confirm we are trying to send
-  // std::cout << "[TUN] Injecting " << packet_with_header.size() << " bytes
-  // (Protocol: " << af_inet_header << ")\n";
-
-  ssize_t ret = write(fd, packet_with_header.data(), packet_with_header.size());
-  if (ret < 0)
-    perror("[TUN ERROR] Write failed");
-  return ret;
+    return write(fd, p.data(), p.size());
 }
 
 #elif defined(__linux__)
@@ -236,7 +227,7 @@ void tun_reader_thread() {
         // Critical for Linux Servers due to offloading.
         if (app.session_manager.is_server()) {
             wasp::utils::fix_packet_checksums(packet_data.data(), nread);
-            wasp::utils::print_packet("SRV-BSD", packet_data.data(), nread);
+            //wasp::utils::print_packet("SRV-BSD", packet_data.data(), nread);
         }
 
         // 7. Routing & Session Lookup
@@ -368,8 +359,6 @@ static int callback_wasp(struct lws *wsi, enum lws_callback_reasons reason,
 
       // 2. [DEBUG] Process Directly on Main Thread (Bypass Worker)
       try {
-        std::cout << "[RX] Decrypting " << pss->rx_buffer.size()
-                  << " bytes...\n";
 
         // A. Decrypt
         auto pkt =
@@ -377,18 +366,18 @@ static int callback_wasp(struct lws *wsi, enum lws_callback_reasons reason,
 
         // B. Write to TUN immediately
         if (!pkt.ip_data.empty()) {
-            wasp::utils::print_packet("CLI-RX", pkt.ip_data.data(), pkt.ip_data.size());
+            //wasp::utils::print_packet("CLI-RX", pkt.ip_data.data(), pkt.ip_data.size());
           ssize_t sent =
               tun_write(app.tun_fd, pkt.ip_data.data(), pkt.ip_data.size());
           if (sent > 0) {
-            std::cout << "[RX] Wrote " << sent << " bytes to TUN.\n";
+            //std::cout << "[RX] Wrote " << sent << " bytes to TUN.\n";
           } else {
             std::cerr << "[RX ERROR] tun_write failed: " << strerror(errno)
                       << "\n";
           }
         }
       } catch (const std::exception &e) {
-        // HERE IS YOUR ERROR
+
         std::cerr << "[RX CRITICAL] Decryption Failed: " << e.what() << "\n";
       }
 
