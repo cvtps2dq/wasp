@@ -67,18 +67,20 @@ struct ClientContext {
     std::unique_ptr<wasp::TunDevice> tun;
     std::unique_ptr<WorkerPool> workers;
 
-    // The active session state
     wasp::Session session{wasp::Role::CLIENT};
-    std::mutex session_mtx; // Protect session access between TunThread and LWS
+    std::mutex session_mtx;
 
-    // Queues
-    std::queue<wasp::ByteBuffer> enc_tx_queue;      // Encrypted frames ready to send to Server
-    std::queue<wasp::ByteBuffer> handshake_queue;   // Handshake JSON to send to Server
+    std::queue<wasp::ByteBuffer> enc_tx_queue;
+    std::queue<wasp::ByteBuffer> handshake_queue;
 
-    struct lws* wsi = nullptr;                      // Active WebSocket connection
+    struct lws* wsi = nullptr;
     struct lws_context* lws_ctx = nullptr;
     std::atomic<bool> running{true};
     std::atomic<bool> tunnel_ready{false};
+
+    // === ADDED CONFIG FIELDS ===
+    std::string config_username;
+    std::string config_password;
 };
 
 ClientContext app;
@@ -160,30 +162,29 @@ static int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
         // ------------------------------------------------
         // CONNECTION LIFECYCLE
         // ------------------------------------------------
-        case LWS_CALLBACK_CLIENT_ESTABLISHED: {
-            log(LogLevel::SUCCESS, "WebSocket Connected to Server.");
-            app.wsi = wsi;
+    case LWS_CALLBACK_CLIENT_ESTABLISHED: {
+        log(LogLevel::SUCCESS, "WebSocket Connected to Server.");
+        app.wsi = wsi;
 
-            std::lock_guard lock(app.session_mtx);
-            // Reset Session State for new connection
-            app.session = wasp::Session(wasp::Role::CLIENT);
+        std::lock_guard lock(app.session_mtx);
+        app.session = wasp::Session(wasp::Role::CLIENT);
 
-            // CREDENTIALS (Hardcoded for now - Pass via argv in real app)
-            // TODO
-            app.session.set_credentials("admin", "secret_password_123");
+        // === CHANGED ===
+        // Use credentials provided via CLI
+        app.session.set_credentials(app.config_username, app.config_password);
 
-            // Initiate Handshake
-            try {
-                std::string hello = app.session.initiate_handshake();
-                wasp::ByteBuffer buf(hello.begin(), hello.end());
-                app.handshake_queue.push(std::move(buf));
-                lws_callback_on_writable(wsi);
-            } catch (const std::exception& e) {
-                log(LogLevel::ERROR, std::string("Handshake Init Failed: ") + e.what());
-                return -1;
-            }
-            break;
+        // Initiate Handshake
+        try {
+            std::string hello = app.session.initiate_handshake();
+            wasp::ByteBuffer buf(hello.begin(), hello.end());
+            app.handshake_queue.push(std::move(buf));
+            lws_callback_on_writable(wsi);
+        } catch (const std::exception& e) {
+            log(LogLevel::ERROR, std::string("Handshake Init Failed: ") + e.what());
+            return -1;
         }
+        break;
+    }
 
         case LWS_CALLBACK_CLIENT_CLOSED:
             log(LogLevel::WARN, "Connection Closed.");
@@ -332,16 +333,23 @@ static struct lws_protocols protocols[] = {
 int main(int argc, char** argv) {
     print_banner();
 
-    // 1. Check Root
     if (geteuid() != 0) {
         log(LogLevel::ERROR, "Sting requires root privileges to manage the TUN interface.");
         return 1;
     }
 
-    // 2. Parse Args
-    std::string server_address = "127.0.0.1";
-    if (argc >= 2) server_address = argv[1];
+    // === CHANGED ARGUMENT PARSING ===
+    if (argc < 4) {
+        std::cerr << Color::YELLOW << "Usage: ./sting <server_ip> <username> <password>" << Color::RESET << std::endl;
+        return 1;
+    }
+
+    std::string server_address = argv[1];
+    app.config_username = argv[2];
+    app.config_password = argv[3];
+
     log(LogLevel::INFO, "Target Server: " + server_address);
+    log(LogLevel::INFO, "User: " + app.config_username);
 
     // 3. Signals
     signal(SIGINT, sigint_handler);

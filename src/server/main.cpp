@@ -20,6 +20,7 @@
 #include <new>
 
 // Internal Library Includes
+#include "db_manager.hpp"
 #include "session_manager.hpp" // Manages IP <-> WSI mapping
 #include "tun_device.hpp"
 #include "wasp_session.hpp"
@@ -97,6 +98,7 @@ struct ServerContext {
     std::string tun_name = "wasp0";
     std::string tun_ip = "10.89.89.1";
     std::string tun_cidr = "24";
+    std::unique_ptr<wasp::db::UserManager> db;
 };
 
 ServerContext app;
@@ -229,6 +231,13 @@ static int callback_wasp(struct lws *wsi, enum lws_callback_reasons reason,
         case LWS_CALLBACK_ESTABLISHED: {
             // Placement New to init session object
             new (pss) WaspSessionData();
+
+            pss->session.set_validator([](const std::string& u, const std::string& p) {
+                bool ok = app.db->authenticate(u, p);
+                if (ok) log(LogLevel::SUCCESS, "Auth Success: " + u);
+                else    log(LogLevel::WARN, "Auth Failed: " + u);
+                return ok;
+            });
 
             // Assign Virtual IP
             pss->virtual_ip = app.sessions.register_client(wsi);
@@ -377,68 +386,127 @@ static struct lws_protocols protocols[] = {
     { NULL, NULL, 0, 0, 0, NULL, 0 }
 };
 
+
+// ==========================================
+// CLI COMMANDS
+// ==========================================
+void print_usage(const char* prog) {
+    std::cout << "Usage:\n"
+              << "  " << prog << " run              Start the VPN Server\n"
+              << "  " << prog << " add <user> <pw>  Register a new user\n"
+              << "  " << prog << " approve <user>   Approve a user\n"
+              << "  " << prog << " list             List all users\n";
+}
+
 // ==========================================
 // MAIN
 // ==========================================
 int main(int argc, char** argv) {
-    print_banner();
-
-    if (geteuid() != 0) {
-        log(LogLevel::ERROR, "Server must run as root to manage TUN interface.");
+    if (argc < 2) {
+        print_usage(argv[0]);
         return 1;
     }
 
-    // 1. Init Session Manager
-    app.sessions.set_is_server(true);
+    std::string command = argv[1];
 
-    try {
-        // 2. Init TUN Device
-        // We request "wasp0". The TunDevice constructor handles creation.
-        app.tun = std::make_unique<wasp::TunDevice>(app.tun_name, true);
-        log(LogLevel::SUCCESS, "Interface " + app.tun->get_name() + " initialized.");
+    // Initialize DB
+    app.db = std::make_unique<wasp::db::UserManager>("wasp.db");
 
-        // 3. Configure OS Networking (IP, MTU, NAT)
-        configure_networking();
+    if (command == "add") {
+        if (argc < 4) { std::cerr << "Missing args.\n"; return 1; }
+        if (app.db->add_user(argv[2], argv[3])) {
+            std::cout << "User " << argv[2] << " added. (Pending Approval)\n";
+        } else {
+            std::cerr << "User already exists.\n";
+        }
+        return 0;
+    }
 
-        // 4. Init Workers
-        unsigned int threads = std::thread::hardware_concurrency();
-        app.workers = std::make_unique<WorkerPool>(threads);
-        log(LogLevel::INFO, "Worker Pool initialized with " + std::to_string(threads) + " threads.");
+    if (command == "approve") {
+        if (argc < 3) { std::cerr << "Missing username.\n"; return 1; }
+        if (app.db->approve_user(argv[2])) {
+            std::cout << "User " << argv[2] << " approved.\n";
+        } else {
+            std::cerr << "User not found.\n";
+        }
+        return 0;
+    }
 
-        // 5. Init LibWebSockets
-        struct lws_context_creation_info info = {0};
-        info.port = 7681;
-        info.protocols = protocols;
-        info.gid = -1; info.uid = -1;
-        info.count_threads = 1; // Single threaded Event Loop
+    if (command == "list") {
+        auto users = app.db->list_users();
+        std::cout << std::left << std::setw(5) << "ID"
+                  << std::setw(20) << "Username"
+                  << std::setw(10) << "Status" << "\n";
+        std::cout << "-----------------------------------\n";
+        for (const auto& u : users) {
+            std::cout << std::setw(5) << u.id
+                      << std::setw(20) << u.username
+                      << (u.is_approved ? "[OK]" : "[PENDING]") << "\n";
+        }
+        return 0;
+    }
 
-        app.lws_ctx = lws_create_context(&info);
-        if (!app.lws_ctx) {
-            log(LogLevel::ERROR, "LWS Context creation failed.");
+    if (command == "run")
+    {
+        print_banner();
+
+        if (geteuid() != 0) {
+            log(LogLevel::ERROR, "Server must run as root to manage TUN interface.");
             return 1;
         }
 
-        // Link Workers to Context
-        app.workers->set_context(app.lws_ctx);
+        // 1. Init Session Manager
+        app.sessions.set_is_server(true);
 
-        // 6. Start TUN Reader
-        std::thread tun_thread(tun_reader_thread);
+        try {
+            // 2. Init TUN Device
+            // We request "wasp0". The TunDevice constructor handles creation.
+            app.tun = std::make_unique<wasp::TunDevice>(app.tun_name, true);
+            log(LogLevel::SUCCESS, "Interface " + app.tun->get_name() + " initialized.");
 
-        // 7. Event Loop
-        log(LogLevel::INFO, "Server Running. Waiting for clients...");
-        while (app.running) {
-            lws_service(app.lws_ctx, 100);
+            // 3. Configure OS Networking (IP, MTU, NAT)
+            configure_networking();
+
+            // 4. Init Workers
+            unsigned int threads = std::thread::hardware_concurrency();
+            app.workers = std::make_unique<WorkerPool>(threads);
+            log(LogLevel::INFO, "Worker Pool initialized with " + std::to_string(threads) + " threads.");
+
+            // 5. Init LibWebSockets
+            struct lws_context_creation_info info = {0};
+            info.port = 7681;
+            info.protocols = protocols;
+            info.gid = -1; info.uid = -1;
+            info.count_threads = 1; // Single threaded Event Loop
+
+            app.lws_ctx = lws_create_context(&info);
+            if (!app.lws_ctx) {
+                log(LogLevel::ERROR, "LWS Context creation failed.");
+                return 1;
+            }
+
+            // Link Workers to Context
+            app.workers->set_context(app.lws_ctx);
+
+            // 6. Start TUN Reader
+            std::thread tun_thread(tun_reader_thread);
+
+            // 7. Event Loop
+            log(LogLevel::INFO, "Server Running. Waiting for clients...");
+            while (app.running) {
+                lws_service(app.lws_ctx, 100);
+            }
+
+            // 8. Cleanup
+            if (tun_thread.joinable()) tun_thread.join();
+            app.workers->stop();
+            lws_context_destroy(app.lws_ctx);
+            log(LogLevel::SUCCESS, "Server Shutdown.");
+
+        } catch (const std::exception& e) {
+            log(LogLevel::ERROR, std::string("Fatal Error: ") + e.what());
+            return 1;
         }
-
-        // 8. Cleanup
-        if (tun_thread.joinable()) tun_thread.join();
-        app.workers->stop();
-        lws_context_destroy(app.lws_ctx);
-        log(LogLevel::SUCCESS, "Server Shutdown.");
-
-    } catch (const std::exception& e) {
-        log(LogLevel::ERROR, std::string("Fatal Error: ") + e.what());
-        return 1;
     }
 
     return 0;
