@@ -173,12 +173,24 @@ void tun_reader_thread() {
             continue;
         }
 
+
+
         // 1. Packet Parsing
         // We need to look at the Destination IP to know which websocket client gets this packet.
         wasp::ByteSpan packet_span(buffer.data(), nread);
         std::string dst_ip = wasp::utils::get_dst_ip(packet_span);
 
         if (dst_ip.empty()) continue; // Not IPv4 or malformed
+
+        // === FILTER NOISE ===
+        // Ignore Multicast (224.0.0.0 - 239.255.255.255) and Broadcast
+        if (dst_ip.length() >= 4 && (
+            dst_ip.rfind("224.", 0) == 0 ||
+            dst_ip.rfind("239.", 0) == 0 ||
+            dst_ip == "255.255.255.255")) {
+            // Silently ignore multicast/broadcast to prevent log spam
+            continue;
+            }
 
         // 2. Routing Lookup
         struct lws* target_wsi = app.sessions.get_wsi_for_ip(dst_ip);
