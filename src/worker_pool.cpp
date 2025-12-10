@@ -1,6 +1,7 @@
 #include "worker_pool.hpp"
 
 #include <iostream>
+#include <libwebsockets/lws-service.h>
 
 WorkerPool::WorkerPool(const size_t num_threads) {
     for (size_t i = 0; i < num_threads; ++i) {
@@ -44,6 +45,10 @@ void WorkerPool::worker_loop() {
                 } else { // Decrypt
                     auto pkt = wasp::parse_packet(task.data, task.session_key);
                     results.push({false, std::move(pkt.ip_data), task.wsi});
+                }
+
+                if (lws_ctx_) {
+                    lws_cancel_service(lws_ctx_);
                 }
             } catch (const std::exception& e) {
                 // Silently drop bad packets in production

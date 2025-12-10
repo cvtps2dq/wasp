@@ -455,9 +455,9 @@ int main(int argc, char **argv) {
   info.uid = -1;
     info.count_threads = 1;
   app.lws_ctx = lws_create_context(&info);
-  if (!app.lws_ctx)
-    return 1;
+  if (!app.lws_ctx) return 1;
 
+    app.worker_pool->set_context(app.lws_ctx);
   if (!is_server) {
     if (argc < 3) {
       std::cerr << "Client mode requires a server address.\n";

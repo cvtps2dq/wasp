@@ -74,9 +74,11 @@ public:
 
     ThreadSafeQueue<CryptoTask> tasks;
     ThreadSafeQueue<CryptoResult> results;
+    void set_context(struct lws_context* ctx) { lws_ctx_ = ctx; }
 
 private:
     void worker_loop();
     std::vector<std::thread> workers_;
     std::atomic<bool> should_stop_{false};
+    struct lws_context* lws_ctx_ = nullptr;
 };
