@@ -453,7 +453,7 @@ int main(int argc, char **argv) {
   info.protocols = protocols;
   info.gid = -1;
   info.uid = -1;
-  info.count_threads = num_threads;
+    info.count_threads = 1;
   app.lws_ctx = lws_create_context(&info);
   if (!app.lws_ctx)
     return 1;
