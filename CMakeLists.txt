@@ -70,6 +70,7 @@ add_executable(wasp_vpn
         src/worker_pool.hpp
         src/session_manager.cpp
         src/session_manager.hpp
+        src/wasp_utils.hpp
 )
 
 # Include Directories
