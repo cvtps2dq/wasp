@@ -1,7 +1,8 @@
 #pragma once
 #include <vector>
 #include <cstdint>
-#include <cstring>
+#include <iostream>
+#include <iomanip>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/tcp.h>
@@ -10,103 +11,92 @@
 
 namespace wasp::utils {
 
-    // 1. Endian-Independent Checksum (RFC 1071 compliant)
-    // Treats data strictly as a stream of Big Endian 16-bit words.
-    inline uint32_t calculate_sum(const uint8_t* data, size_t len, uint32_t initial_sum) {
-        uint32_t sum = initial_sum;
-        const uint8_t* ptr = data;
-
-        // Sum 16-bit words
-        while (len > 1) {
-            // Construct 16-bit word manually: (Hi << 8) | Lo
-            uint16_t word = (static_cast<uint16_t>(ptr[0]) << 8) + ptr[1];
-            sum += word;
-            ptr += 2;
-            len -= 2;
+    // --- Debugging ---
+    inline void print_packet(const char* label, const uint8_t* data, size_t len) {
+        // Only print first 64 bytes (Headers) to avoid spam
+        size_t limit = len < 64 ? len : 64;
+        std::cout << "[" << label << "] " << std::dec << len << " bytes: ";
+        for (size_t i = 0; i < limit; ++i) {
+            std::cout << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<int>(data[i]) << " ";
         }
-
-        // Handle odd byte (Padded with 0 at the end)
-        if (len > 0) {
-            uint16_t word = (static_cast<uint16_t>(ptr[0]) << 8);
-            sum += word;
-        }
-
-        return sum;
+        std::cout << std::dec << std::endl;
     }
 
-    // 2. Finalize: Fold 32-bit sum to 16-bit One's Complement
-    inline uint16_t finalize_checksum(uint32_t sum) {
+    // --- Standard Checksum (lwIP Style) ---
+    inline uint16_t standard_chksum(const void *dataptr, int len) {
+        const uint8_t *pb = reinterpret_cast<const uint8_t *>(dataptr);
+        const uint16_t *ps;
+        uint32_t sum = 0;
+        int tlen = len;
+
+        ps = reinterpret_cast<const uint16_t *>(pb);
+        while (tlen > 1) {
+            sum += *ps++;
+            tlen -= 2;
+        }
+        if (tlen > 0) {
+            // Take care of the last odd byte
+            sum += *reinterpret_cast<const uint8_t *>(ps);
+        }
+
+        // Fold 32-bit sum to 16-bit
         while (sum >> 16) {
             sum = (sum & 0xFFFF) + (sum >> 16);
         }
-        // Result is already in Host Integer format corresponding to Network value
         return static_cast<uint16_t>(~sum);
     }
 
-    // 3. Master Fixer
+    // --- Packet Fixer ---
     inline void fix_packet_checksums(uint8_t* packet, size_t len) {
         if (len < sizeof(struct ip)) return;
-
         struct ip* ip_hdr = reinterpret_cast<struct ip*>(packet);
         if (ip_hdr->ip_v != 4) return;
 
         size_t ip_len = ip_hdr->ip_hl * 4;
         if (len < ip_len) return;
 
-        // --- Fix IP Header Checksum ---
+        // 1. IP Checksum
         ip_hdr->ip_sum = 0;
-        // Calculate sum of header bytes
-        uint32_t ip_sum_val = calculate_sum(packet, ip_len, 0);
-        // Write result in Network Byte Order
-        ip_hdr->ip_sum = htons(finalize_checksum(ip_sum_val));
+        ip_hdr->ip_sum = standard_chksum(packet, ip_len);
 
-        // --- Prepare for L4 (Pseudo Header) ---
+        // 2. L4 Checksum
         uint8_t* l4_ptr = packet + ip_len;
         size_t l4_len = len - ip_len;
 
-        // Pseudo Header Sum: SrcIP + DstIP + Proto + Length
-        // We can cheat and just sum the bytes of the IP Header fields directly
-        // because they are already in Network Byte Order.
-        uint32_t pseudo_sum = 0;
+        // Prepare Pseudo Header Sum
+        uint32_t sum = 0;
+        const uint16_t* src = reinterpret_cast<const uint16_t*>(&ip_hdr->ip_src);
+        const uint16_t* dst = reinterpret_cast<const uint16_t*>(&ip_hdr->ip_dst);
 
-        // Src IP (4 bytes)
-        pseudo_sum = calculate_sum(reinterpret_cast<uint8_t*>(&ip_hdr->ip_src), 4, pseudo_sum);
-        // Dst IP (4 bytes)
-        pseudo_sum = calculate_sum(reinterpret_cast<uint8_t*>(&ip_hdr->ip_dst), 4, pseudo_sum);
+        // Sum IPs
+        sum += src[0]; sum += src[1];
+        sum += dst[0]; sum += dst[1];
 
-        // Protocol (1 byte, padded to 2) -> 0x00 + Proto
-        pseudo_sum += ip_hdr->ip_p;
+        // Sum Proto + Length (Host endian addition of 16-bit words?)
+        // No, standard pseudo header logic:
+        // Proto(upper 0) + Length
+        sum += htons(ip_hdr->ip_p);
+        sum += htons(static_cast<uint16_t>(l4_len));
 
-        // L4 Length (16-bit value)
-        pseudo_sum += l4_len;
-
-        // --- Fix Layer 4 ---
         if (ip_hdr->ip_p == IPPROTO_ICMP) {
-            if (l4_len < sizeof(struct icmp)) return;
+            // ICMP v4: No Pseudo Header
             struct icmp* icmp_hdr = reinterpret_cast<struct icmp*>(l4_ptr);
-
-            // ICMP Checksum = Only ICMP Header + Data (No Pseudo Header for IPv4)
             icmp_hdr->icmp_cksum = 0;
-            uint32_t sum = calculate_sum(l4_ptr, l4_len, 0);
-            icmp_hdr->icmp_cksum = htons(finalize_checksum(sum));
+            icmp_hdr->icmp_cksum = standard_chksum(l4_ptr, l4_len);
         }
         else if (ip_hdr->ip_p == IPPROTO_TCP) {
-            if (l4_len < sizeof(struct tcphdr)) return;
-            struct tcphdr* tcp_hdr = reinterpret_cast<struct tcphdr*>(l4_ptr);
+            struct tcphdr* th = reinterpret_cast<struct tcphdr*>(l4_ptr);
+            th->th_sum = 0;
 
-            tcp_hdr->th_sum = 0;
-            uint32_t sum = calculate_sum(l4_ptr, l4_len, pseudo_sum);
-            tcp_hdr->th_sum = htons(finalize_checksum(sum));
-        }
-        else if (ip_hdr->ip_p == IPPROTO_UDP) {
-            if (l4_len < sizeof(struct udphdr)) return;
-            struct udphdr* udp_hdr = reinterpret_cast<struct udphdr*>(l4_ptr);
+            // Add L4 data to Pseudo Sum
+            const uint16_t* d = reinterpret_cast<const uint16_t*>(l4_ptr);
+            int dlen = l4_len;
+            while(dlen > 1) { sum += *d++; dlen -= 2; }
+            if(dlen > 0) sum += *reinterpret_cast<const uint8_t*>(d);
 
-            udp_hdr->uh_sum = 0;
-            uint32_t sum = calculate_sum(l4_ptr, l4_len, pseudo_sum);
-            uint16_t final = finalize_checksum(sum);
-            if (final == 0) final = 0xFFFF;
-            udp_hdr->uh_sum = htons(final);
+            while(sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+            th->th_sum = static_cast<uint16_t>(~sum);
         }
     }
 }

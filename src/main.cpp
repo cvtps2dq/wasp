@@ -236,6 +236,8 @@ void tun_reader_thread() {
         // Critical for Linux Servers due to offloading.
         if (app.session_manager.is_server()) {
             wasp::utils::fix_packet_checksums(packet_data.data(), nread);
+            // ===> LOG OUTGOING PACKET <===
+            wasp::utils::print_packet("SRV-TX", packet_data.data(), nread);
         }
 
         // 7. Routing & Session Lookup
@@ -376,6 +378,7 @@ static int callback_wasp(struct lws *wsi, enum lws_callback_reasons reason,
 
         // B. Write to TUN immediately
         if (!pkt.ip_data.empty()) {
+            wasp::utils::print_packet("CLI-RX", pkt.ip_data.data(), pkt.ip_data.size());
           ssize_t sent =
               tun_write(app.tun_fd, pkt.ip_data.data(), pkt.ip_data.size());
           if (sent > 0) {
