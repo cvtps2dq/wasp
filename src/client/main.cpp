@@ -65,6 +65,26 @@ __/\\\______________/\\\_____/\\\\\\\\\________/\\\\\\\\\\\____/\\\\\\\\\\\\\___
 }
 
 // ==========================================
+// Helper: Address Parser
+// ==========================================
+struct ParsedAddress {
+    std::string host;
+    int port;
+};
+
+// Parses "host:port" or "host" (defaults port to 7681)
+ParsedAddress parse_address(std::string_view full_address) {
+    size_t colon_pos = full_address.find(':');
+    if (colon_pos != std::string_view::npos) {
+        std::string host(full_address.substr(0, colon_pos));
+        int port = std::stoi(std::string(full_address.substr(colon_pos + 1)));
+        return {host, port};
+    }
+    // No port specified, use default
+    return {std::string(full_address), 7681};
+}
+
+// ==========================================
 // Global Context
 // ==========================================
 struct ClientContext {
@@ -85,6 +105,9 @@ struct ClientContext {
     // === ADDED CONFIG FIELDS ===
     std::string config_username;
     std::string config_password;
+
+    std::string config_server_host;
+    int config_server_port;
 
     std::atomic<bool> fatal_error{false};
 };
@@ -352,15 +375,19 @@ int main(int argc, char** argv) {
 
     // === CHANGED ARGUMENT PARSING ===
     if (argc < 4) {
-        std::cerr << Color::YELLOW << "Usage: ./sting <server_ip> <username> <password>" << Color::RESET << std::endl;
+        std::cerr << Color::YELLOW << "Usage: ./sting <host[:port]> <username> <password>" << Color::RESET << std::endl;
         return 1;
     }
 
-    std::string server_address = argv[1];
+    // Use the parser
+    ParsedAddress addr = parse_address(argv[1]);
+    app.config_server_host = addr.host;
+    app.config_server_port = addr.port;
+
     app.config_username = argv[2];
     app.config_password = argv[3];
 
-    log(LogLevel::INFO, "Target Server: " + server_address);
+    log(LogLevel::INFO, "Target Server: " + app.config_server_host + ":" + std::to_string(app.config_server_port));
     log(LogLevel::INFO, "User: " + app.config_username);
 
     // 3. Signals
@@ -397,8 +424,8 @@ int main(int argc, char** argv) {
         // 7. Connect Info
         struct lws_client_connect_info ccinfo = {0};
         ccinfo.context = app.lws_ctx;
-        ccinfo.address = server_address.c_str();
-        ccinfo.port = 7681;
+        ccinfo.address = app.config_server_host.c_str(); // Use parsed host
+        ccinfo.port = app.config_server_port;            // Use parsed port
         ccinfo.path = "/";
         ccinfo.protocol = protocols[0].name;
         ccinfo.pwsi = &app.wsi;
