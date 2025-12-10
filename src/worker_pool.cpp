@@ -1,7 +1,7 @@
 #include "worker_pool.hpp"
 
 #include <iostream>
-#include <libwebsockets/lws-service.h>
+#include <libwebsockets.h>
 
 WorkerPool::WorkerPool(const size_t num_threads) {
     for (size_t i = 0; i < num_threads; ++i) {
