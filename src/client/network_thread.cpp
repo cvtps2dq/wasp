@@ -35,6 +35,7 @@ using HandshakeQueue = std::queue<wasp::ByteBuffer>;
 
 void log_dual(LogLevel level, const std::string& msg) {
     if (level == LogLevel::ERROR) std::cerr << "[NET-ERR] " << msg << std::endl;
+    else if (level == LogLevel::CMD) std::cout << "[CMD] " << msg << std::endl;
     else if (level == LogLevel::WARN) std::cout << "[NET-WARN] " << msg << std::endl;
     else if (level == LogLevel::DEBUG) std::cout << "[NET-DBG] " << msg << std::endl;
     else std::cout << "[NET-INFO] " << msg << std::endl;
@@ -42,8 +43,42 @@ void log_dual(LogLevel level, const std::string& msg) {
     if (g_state) g_state->log_queue.push({level, msg});
 }
 
-void run_command(const std::string& cmd) {
-    system(cmd.c_str());
+    // Replace your existing run_command with this:
+
+    void run_command(const std::string& cmd) {
+    // Log what we are about to run
+    log_dual(LogLevel::CMD, "CMD: " + cmd);
+
+    std::array<char, 256> buffer;
+    std::string result;
+
+    // Append "2>&1" to capture Errors too, but remove "> /dev/null" from caller!
+    std::string full_cmd = cmd + " 2>&1";
+
+    FILE* pipe = popen(full_cmd.c_str(), "r");
+    if (!pipe) {
+        log_dual(LogLevel::ERROR, "popen() failed!");
+        return;
+    }
+
+    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+        // Trim newline at end
+        std::string line(buffer.data());
+        if (!line.empty() && line.back() == '\n') line.pop_back();
+
+        // Log the output from the tool
+        if (!line.empty()) {
+            log_dual(LogLevel::DEBUG, "  >> " + line);
+        }
+    }
+
+    int return_code = pclose(pipe);
+
+    if (return_code != 0) {
+        // WEXITSTATUS extracts the actual exit code from the shell wrapper
+        int exit_code = WEXITSTATUS(return_code);
+        log_dual(LogLevel::WARN, "Command failed with exit code: " + std::to_string(exit_code));
+    }
 }
 
 std::string get_default_gateway() {
@@ -66,16 +101,16 @@ void cleanup_routing() {
     if (g_state && g_state->tunnel_ready) {
         log_dual(LogLevel::INFO, "Restoring network routes...");
         #if defined(__APPLE__)
-            run_command("sudo route delete -net 0.0.0.0/1 >/dev/null 2>&1");
-            run_command("sudo route delete -net 128.0.0.0/1 >/dev/null 2>&1");
+            run_command("sudo route delete -net 0.0.0.0/1");
+            run_command("sudo route delete -net 128.0.0.0/1");
             if (!g_state->server_resolved_ip.empty()) {
-                run_command("sudo route delete " + g_state->server_resolved_ip + " >/dev/null 2>&1");
+                run_command("sudo route delete " + g_state->server_resolved_ip);
             }
         #elif defined(__linux__)
-            run_command("sudo ip route del 0.0.0.0/1 >/dev/null 2>&1");
-            run_command("sudo ip route del 128.0.0.0/1 >/dev/null 2>&1");
+            run_command("sudo ip route del 0.0.0.0/1");
+            run_command("sudo ip route del 128.0.0.0/1");
             if (!g_state->server_resolved_ip.empty()) {
-                run_command("sudo ip route del " + g_state->server_resolved_ip + " >/dev/null 2>&1");
+                run_command("sudo ip route del " + g_state->server_resolved_ip);
             }
         #endif
         g_state->tunnel_ready = false;
@@ -223,9 +258,9 @@ int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
                         // ===========================
 
                         run_command("sudo ifconfig " + g_state->tun->get_name() + " " + g_state->assigned_ip + " " + vpn_gw + " up");
-                        run_command("sudo route add " + g_state->server_resolved_ip + " " + g_state->original_gateway_ip + " >/dev/null 2>&1");
-                        run_command("sudo route add -net 0.0.0.0/1 " + vpn_gw + " >/dev/null 2>&1");
-                        run_command("sudo route add -net 128.0.0.0/1 " + vpn_gw + " >/dev/null 2>&1");
+                        run_command("sudo route add " + g_state->server_resolved_ip + " " + g_state->original_gateway_ip);
+                        run_command("sudo route add -net 0.0.0.0/1 " + vpn_gw);
+                        run_command("sudo route add -net 128.0.0.0/1 " + vpn_gw);
 
                         #elif defined(__linux__)
                         // === FIX 3: SET MTU 1280 ===

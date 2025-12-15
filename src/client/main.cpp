@@ -85,6 +85,16 @@ int main(int argc, char** argv) {
     app_state.log_queue.push({LogLevel::INFO, "Starting network backend..."});
     std::thread network_backend(network_thread_main, &app_state);
 
+    app_state.log_queue.push({LogLevel::SUCCESS, R"(
+ ______     ______   __     __   __     ______
+/\  ___\   /\__  _\ /\ \   /\ "-.\ \   /\  ___\
+\ \___  \  \/_/\ \/ \ \ \  \ \ \-.  \  \ \ \__ \
+ \/\_____\    \ \_\  \ \_\  \ \_\\"\_\  \ \_____\
+  \/_____/     \/_/   \/_/   \/_/ \/_/   \/_____/
+     Web Augmented Secure Protocol Client v1.5
+                    lumen | cv2
+)"});
+
     // ==========================================
     // MAIN RENDER LOOP
     // ==========================================

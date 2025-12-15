@@ -12,7 +12,7 @@
 // ==========================================
 
 // LogLevel Enum
-enum class LogLevel { INFO, SUCCESS, WARN, ERROR, DEBUG, TRAFFIC };
+enum class LogLevel { INFO, SUCCESS, WARN, ERROR, DEBUG, TRAFFIC, CMD };
 
 // Parsed Address Struct
 struct ParsedAddress {

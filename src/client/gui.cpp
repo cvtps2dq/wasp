@@ -102,10 +102,12 @@ std::string format_bytes(uint64_t bytes) {
 
 ImVec4 get_color_for_level(LogLevel level) {
     switch (level) {
-        case LogLevel::SUCCESS: return ImVec4(0.1f, 0.7f, 0.1f, 1.0f);
-        case LogLevel::WARN:    return ImVec4(0.9f, 0.6f, 0.0f, 1.0f);
-        case LogLevel::ERROR:   return ImVec4(0.8f, 0.1f, 0.1f, 1.0f);
-        default:                return ImVec4(0.5f, 0.5f, 0.5f, 1.0f);
+        case LogLevel::SUCCESS: return {0.1f, 0.7f, 0.1f, 1.0f};
+        case LogLevel::WARN:    return {0.9f, 0.6f, 0.0f, 1.0f};
+        case LogLevel::ERROR:   return {0.8f, 0.1f, 0.1f, 1.0f};
+        case LogLevel::DEBUG:   return {0.4f, 0.0f, 0.4f, 1.0f};
+        case LogLevel::CMD:     return {0.6f, 0.0f, 1.0f, 1.0f};
+        default:                return {0.5f, 0.5f, 0.5f, 1.0f};
     }
 }
 
@@ -190,6 +192,7 @@ void render_ui(AppState& state) {
         }
 
         ImGui::Spacing();
+
         ImGui::Text("Traffic");
         ImGui::Text("  Sent:"); ImGui::SameLine(); ImGui::Text("%s", format_bytes(state.bytes_sent.load()).c_str());
         ImGui::Text("  Recv:"); ImGui::SameLine(); ImGui::Text("%s", format_bytes(state.bytes_received.load()).c_str());
