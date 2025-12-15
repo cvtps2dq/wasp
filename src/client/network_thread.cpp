@@ -82,8 +82,8 @@ void cleanup_routing() {
     }
 }
 
-// --- TUN Reader Thread ---
-void tun_reader_loop() {
+    // --- TUN Reader Thread ---
+    void tun_reader_loop() {
     log_dual(LogLevel::INFO, "TUN Thread: Started.");
     std::vector<uint8_t> buffer(65536);
 
@@ -92,6 +92,16 @@ void tun_reader_loop() {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
+
+        // === FLOW CONTROL (BACKPRESSURE) ===
+        // If we have too many packets waiting to be sent, stop reading from TUN.
+        // This prevents memory ballooning and allows the network to catch up.
+        // 500 packets * ~1400 bytes = ~700KB buffered.
+        if (g_state->workers->results.size() > 500) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        // ===================================
 
         ssize_t nread = g_state->tun->read(buffer);
         if (g_state->exit_requested) break;
@@ -112,7 +122,7 @@ void tun_reader_loop() {
                 wasp::InnerCommand::IPV4, std::move(key), g_state->wsi
             });
 
-            g_state->bytes_sent += nread;
+            // Note: bytes_sent tracks encrypted writes, maybe track raw reads here for stats?
             if(g_state->lws_ctx) lws_cancel_service(g_state->lws_ctx);
         }
     }
@@ -252,6 +262,8 @@ int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
 
         case LWS_CALLBACK_CLIENT_WRITEABLE: {
             auto* q = static_cast<HandshakeQueue*>(lws_get_opaque_user_data(wsi));
+
+            // 1. Handshake Priority (unchanged)
             if (q && !q->empty()) {
                 auto& msg = q->front();
                 std::vector<uint8_t> buf(LWS_PRE + msg.size());
@@ -262,16 +274,27 @@ int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
                 return 0;
             }
 
+            // 2. Encrypted Data with Flow Control
             CryptoResult res;
-            int burst = 0;
-            while (burst < 20 && g_state->workers->results.try_pop(res)) {
+
+            // Keep sending as long as we have data AND the socket isn't full
+            while (!lws_send_pipe_choked(wsi) && g_state->workers->results.try_pop(res)) {
                 if (res.is_encrypted) {
-                    lws_write(wsi, res.data.data() + LWS_PRE, res.data.size() - LWS_PRE, LWS_WRITE_BINARY);
+                    int n = lws_write(wsi, res.data.data() + LWS_PRE, res.data.size() - LWS_PRE, LWS_WRITE_BINARY);
+
+                    if (n < 0) {
+                        log_dual(LogLevel::ERROR, "Write failed - closing connection");
+                        return -1; // Socket dead
+                    }
+
                     g_state->bytes_sent += (res.data.size() - LWS_PRE);
-                    burst++;
                 }
             }
-            if (!g_state->workers->results.empty()) lws_callback_on_writable(wsi);
+
+            // If we still have data but stopped because of choke or burst limit, ask for callback again
+            if (!g_state->workers->results.empty()) {
+                lws_callback_on_writable(wsi);
+            }
             break;
         }
 

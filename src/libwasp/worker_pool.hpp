@@ -52,17 +52,20 @@ public:
         return true;
     }
 
-    // ===> ADD THIS METHOD <===
     bool empty() {
         std::lock_guard<std::mutex> lock(mtx_);
         return q_.empty();
     }
-    // =========================
 
     void stop() {
         std::lock_guard<std::mutex> lock(mtx_);
         stop_ = true;
         cond_.notify_all();
+    }
+
+    size_t size() {
+        std::lock_guard<std::mutex> lock(mtx_);
+        return q_.size();
     }
 
 private:
@@ -72,7 +75,6 @@ private:
     bool stop_ = false;
 };
 
-// ... WorkerPool class remains the same ...
 class WorkerPool {
 public:
     WorkerPool(size_t num_threads);
