@@ -109,13 +109,6 @@ struct ServerContext {
 
 ServerContext app;
 
-// Signal Handler
-void sigint_handler(int) {
-    log(LogLevel::WARN, "Interrupt received. Shutting down...");
-    app.running = false;
-    lws_cancel_service(app.lws_ctx);
-}
-
 // ==========================================
 // Helper: System Commands
 // ==========================================
@@ -123,6 +116,33 @@ void run_command(const std::string& cmd) {
     log(LogLevel::DEBUG, "CMD: " + cmd);
     int ret = system(cmd.c_str());
     if (ret != 0) log(LogLevel::WARN, "Command returned non-zero exit code.");
+}
+
+// ==========================================
+// Helper: Get WAN Interface
+// ==========================================
+std::string get_wan_interface() {
+    std::string interface;
+    std::array<char, 256> buffer{};
+
+    // Ask the kernel for the route to a public IP (Google DNS)
+    // The output is like: "8.8.8.8 via 192.168.1.1 dev enp0s5 src ..."
+    FILE* pipe = popen("ip route get 8.8.8.8", "r");
+    if (!pipe) return "";
+
+    if (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+        std::string result(buffer.data());
+        std::stringstream ss(result);
+        std::string word;
+        while (ss >> word) {
+            if (word == "dev") {
+                ss >> interface; // The next word is the interface name
+                break;
+            }
+        }
+    }
+    pclose(pipe);
+    return interface;
 }
 
 void configure_networking() {
@@ -141,12 +161,20 @@ void configure_networking() {
     // 4. Enable IP Forwarding (Critical for VPN)
     run_command("sysctl -w net.ipv4.ip_forward=1");
 
-    // 5. Enable NAT (Masquerading) so clients can reach the internet
-    // TODO
-    // Note: This assumes 'eth0' is the WAN interface. Adjust if necessary.
-    // run_command("iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE");
-    // run_command("iptables -A FORWARD -i " + app.tun_name + " -j ACCEPT");
-    // run_command("iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT");
+    std::string wan_iface = get_wan_interface();
+    if (wan_iface.empty()) {
+        log(LogLevel::ERROR, "Could not determine WAN interface. NAT/Masquerading will fail.");
+    } else {
+        log(LogLevel::INFO, "Using '" + wan_iface + "' as WAN interface for NAT.");
+        // 1. Masquerade: Rewrite VPN source IPs to the server's public IP
+        run_command("iptables -t nat -A POSTROUTING -o " + wan_iface + " -j MASQUERADE");
+
+        // 2. Forwarding Rule: Allow packets from our VPN subnet to be forwarded
+        run_command("iptables -A FORWARD -i " + app.tun_name + " -j ACCEPT");
+
+        // 3. Forwarding Rule: Allow established connections to send replies back into the VPN
+        run_command("iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT");
+    }
 
     // 6. Disable Hardware Offloading on TUN (Critical for Checksums)
     // Even though our code fixes checksums, it's good practice to tell the kernel.
@@ -416,6 +444,25 @@ void print_usage(const char* prog) {
               << "  " << prog << " list             List all users\n";
 }
 
+void cleanup_networking() {
+    log(LogLevel::INFO, "Restoring network configuration...");
+    std::string wan_iface = get_wan_interface();
+    if (!wan_iface.empty()) {
+        run_command("iptables -t nat -D POSTROUTING -o " + wan_iface + " -j MASQUERADE");
+        run_command("iptables -D FORWARD -i " + app.tun_name + " -j ACCEPT");
+        run_command("iptables -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT");
+    }
+    log(LogLevel::SUCCESS, "Network configuration restored.");
+}
+
+// Signal Handler
+void sigint_handler(int) {
+    log(LogLevel::WARN, "Interrupt received. Shutting down...");
+    app.running = false;
+    cleanup_networking();
+    if (app.lws_ctx) lws_cancel_service(app.lws_ctx);
+}
+
 // ==========================================
 // MAIN
 // ==========================================
@@ -537,5 +584,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    cleanup_networking();
+    log(LogLevel::SUCCESS, "Server Shutdown.");
     return 0;
 }

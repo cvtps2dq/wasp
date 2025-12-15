@@ -64,6 +64,33 @@ __/\\\______________/\\\_____/\\\\\\\\\________/\\\\\\\\\\\____/\\\\\\\\\\\\\___
     )" << Color::RESET << std::endl;
 }
 
+
+
+// ==========================================
+// Helper: System Information
+// ==========================================
+std::string get_default_gateway() {
+    std::string gateway;
+    std::array<char, 128> buffer;
+
+    // Use popen to run netstat and parse the output
+    FILE* pipe = popen("netstat -rn | grep default", "r");
+    if (!pipe) {
+        log(LogLevel::ERROR, "Could not get default gateway!");
+        return "";
+    }
+
+    if (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+        std::string result(buffer.data());
+        std::stringstream ss(result);
+        std::string default_keyword, gateway_ip;
+        ss >> default_keyword >> gateway_ip;
+        gateway = gateway_ip;
+    }
+    pclose(pipe);
+    return gateway;
+}
+
 // ==========================================
 // Helper: Address Parser
 // ==========================================
@@ -110,16 +137,12 @@ struct ClientContext {
     int config_server_port;
 
     std::atomic<bool> fatal_error{false};
+
+    std::string server_resolved_ip;
+    std::string original_gateway_ip;
 };
 
 ClientContext app;
-
-// Signal Handler
-void sigint_handler(int) {
-    log(LogLevel::WARN, "Interrupt received. Shutting down...");
-    app.running = false;
-    lws_cancel_service(app.lws_ctx);
-}
 
 // ==========================================
 // Helper: System Commands
@@ -195,6 +218,10 @@ static int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
         log(LogLevel::SUCCESS, "WebSocket Connected to Server.");
         app.wsi = wsi;
 
+        char ip_buf[46];
+        lws_get_peer_simple(wsi, ip_buf, sizeof(ip_buf));
+        app.server_resolved_ip = ip_buf;
+
         std::lock_guard lock(app.session_mtx);
         app.session = wasp::Session(wasp::Role::CLIENT);
 
@@ -246,20 +273,53 @@ static int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
                     }
 
                     // Check if Handshake Just Finished
-                    if (app.session.is_established() && !app.tunnel_ready) {
+                    if (app.session.is_established() && !app.tunnel_ready)
+                    {
                         app.tunnel_ready = true;
-                        std::string ip = app.session.get_assigned_ip();
-                        log(LogLevel::SUCCESS, "Tunnel ESTABLISHED! Assigned IP: " + ip);
+                        std::string client_ip = app.session.get_assigned_ip();
+                        std::string vpn_gateway = "10.89.89.1"; // The server's TUN IP
 
-                        // Configure OS Interface
-                        #if defined(__APPLE__)
-                            run_command("sudo ifconfig " + app.tun->get_name() + " " + ip + " 10.89.89.1 up");
-                            run_command("sudo route add -net 10.89.89.0/24 -interface " + app.tun->get_name());
-                        #elif defined(__linux__)
-                            run_command("sudo ip addr add " + ip + "/24 dev " + app.tun->get_name());
-                            run_command("sudo ip link set " + app.tun->get_name() + " up");
-                        #endif
+                        log(LogLevel::SUCCESS, "Tunnel ESTABLISHED! Assigned IP: " + client_ip);
+
+                        // === FULL TUNNEL ROUTING LOGIC ===
+                        log(LogLevel::INFO, "Modifying system routing table for Full Tunnel...");
+
+                        // 1. Get original gateway (e.g., your router's IP)
+                        app.original_gateway_ip = get_default_gateway();
+                        if (app.original_gateway_ip.empty()) {
+                            log(LogLevel::ERROR, "Could not determine original gateway. Aborting route changes.");
+                            // In a real app, you might want to disconnect here.
+                            return -1;
+                        }
+
+                        log(LogLevel::INFO, "Original Gateway: " + app.original_gateway_ip);
+                        log(LogLevel::INFO, "VPN Server IP: " + app.server_resolved_ip);
+
+#if defined(__APPLE__)
+                        // 2. Configure the TUN interface itself (Point-to-Point)
+                        run_command("sudo ifconfig " + app.tun->get_name() + " " + client_ip + " " + vpn_gateway + " up");
+
+                        // 3. Create an exception for our VPN server to bypass the tunnel
+                        run_command("sudo route add " + app.server_resolved_ip + " " + app.original_gateway_ip);
+
+                        // 4. Hijack the internet by routing 0.0.0.0/1 and 128.0.0.0/1
+                        run_command("sudo route add -net 0.0.0.0/1 " + vpn_gateway);
+                        run_command("sudo route add -net 128.0.0.0/1 " + vpn_gateway);
+
+#elif defined(__linux__)
+                        // Linux syntax is different
+                        run_command("sudo ip addr add " + client_ip + "/24 dev " + app.tun->get_name());
+                        run_command("sudo ip link set " + app.tun->get_name() + " up");
+
+                        run_command("sudo ip route add " + app.server_resolved_ip + " via " + app.original_gateway_ip);
+                        run_command("sudo ip route add 0.0.0.0/1 via " + vpn_gateway);
+                        run_command("sudo ip route add 128.0.0.0/1 via " + vpn_gateway);
+#endif
+
+                        log(LogLevel::SUCCESS, "Full Tunnel Mode Activated!");
+                        std::cout << "\n" << Color::BOLD << "    Test with: curl ifconfig.me" << Color::RESET << "\n" << std::endl;
                     }
+
                 }
                 catch (const wasp::AuthError& e) {
                     log(LogLevel::ERROR, std::string(Color::RED) + "FATAL AUTH ERROR: " + e.what());
@@ -362,6 +422,34 @@ static struct lws_protocols protocols[] = {
     { NULL, NULL, 0, 0, 0, NULL, 0 }
 };
 
+void cleanup_routing() {
+    if (app.tunnel_ready) {
+        log(LogLevel::INFO, "Restoring original network routes...");
+#if defined(__APPLE__)
+        run_command("sudo route delete -net 0.0.0.0/1");
+        run_command("sudo route delete -net 128.0.0.0/1");
+        if (!app.server_resolved_ip.empty()) {
+            run_command("sudo route delete " + app.server_resolved_ip);
+        }
+#elif defined(__linux__)
+        run_command("sudo ip route del 0.0.0.0/1");
+        run_command("sudo ip route del 128.0.0.0/1");
+        if (!app.server_resolved_ip.empty()) {
+            run_command("sudo ip route del " + app.server_resolved_ip);
+        }
+#endif
+        log(LogLevel::SUCCESS, "Network routes restored.");
+    }
+}
+
+// Signal Handler
+void sigint_handler(int) {
+    log(LogLevel::WARN, "Interrupt received. Shutting down...");
+    app.running = false;
+    cleanup_routing();
+    if(app.lws_ctx) lws_cancel_service(app.lws_ctx);
+}
+
 // ==========================================
 // MAIN
 // ==========================================
@@ -463,6 +551,6 @@ int main(int argc, char** argv) {
         log(LogLevel::ERROR, std::string("Fatal Error: ") + e.what());
         return 1;
     }
-
+    cleanup_routing();
     return 0;
 }
