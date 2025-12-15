@@ -182,4 +182,11 @@ namespace wasp {
 #endif
     }
 
+    void TunDevice::close_fd() {
+        if (fd_ >= 0) {
+            ::close(fd_); // This causes blocking read() in another thread to return -1 immediately
+            fd_ = -1;
+        }
+    }
+
 } // namespace wasp

@@ -19,6 +19,7 @@ namespace wasp {
         // Writes Buffer -> OS.
         // Handles: Headers (Mac)
         ssize_t write(const std::vector<uint8_t>& buffer);
+        void close_fd();
 
     private:
         int fd_ = -1;
