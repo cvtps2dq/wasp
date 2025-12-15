@@ -32,3 +32,5 @@ target_link_libraries(wasp_server PRIVATE
         sqlite_orm::sqlite_orm
         SQLite::SQLite3
 )
+
+target_include_directories(wasp_server PRIVATE ${LWS_INCLUDE_DIR})

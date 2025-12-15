@@ -120,7 +120,7 @@ void tun_reader_loop() {
 }
 
 // --- LWS Callback ---
-static int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
+int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
                           void *user, void *in, size_t len) {
     switch (reason) {
         case LWS_CALLBACK_CLIENT_ESTABLISHED: {
@@ -200,22 +200,33 @@ static int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
                     if (g_state->session.is_established() && !g_state->tunnel_ready) {
                         g_state->tunnel_ready = true;
                         g_state->assigned_ip = g_state->session.get_assigned_ip();
-                        log_dual(LogLevel::SUCCESS, "VPN Active! IP: " + g_state->assigned_ip);
+                        log_dual(LogLevel::SUCCESS, "VPN Active! Virtual IP: " + g_state->assigned_ip);
 
                         g_state->original_gateway_ip = get_default_gateway();
                         std::string vpn_gw = "10.89.89.1";
 
+                        log_dual(LogLevel::INFO, "VPN Server IP: " + g_state->server_resolved_ip);
+
                         #if defined(__APPLE__)
-                            run_command("sudo ifconfig " + g_state->tun->get_name() + " " + g_state->assigned_ip + " " + vpn_gw + " up");
-                            run_command("sudo route add " + g_state->server_resolved_ip + " " + g_state->original_gateway_ip + " >/dev/null 2>&1");
-                            run_command("sudo route add -net 0.0.0.0/1 " + vpn_gw + " >/dev/null 2>&1");
-                            run_command("sudo route add -net 128.0.0.0/1 " + vpn_gw + " >/dev/null 2>&1");
+                        // === FIX 3: SET MTU 1280 ===
+                        run_command("sudo ifconfig " + g_state->tun->get_name() + " mtu 1280");
+                        // ===========================
+
+                        run_command("sudo ifconfig " + g_state->tun->get_name() + " " + g_state->assigned_ip + " " + vpn_gw + " up");
+                        run_command("sudo route add " + g_state->server_resolved_ip + " " + g_state->original_gateway_ip + " >/dev/null 2>&1");
+                        run_command("sudo route add -net 0.0.0.0/1 " + vpn_gw + " >/dev/null 2>&1");
+                        run_command("sudo route add -net 128.0.0.0/1 " + vpn_gw + " >/dev/null 2>&1");
+
                         #elif defined(__linux__)
-                            run_command("sudo ip addr add " + g_state->assigned_ip + "/24 dev " + g_state->tun->get_name());
-                            run_command("sudo ip link set " + g_state->tun->get_name() + " up");
-                            run_command("sudo ip route add " + g_state->server_resolved_ip + " via " + g_state->original_gateway_ip);
-                            run_command("sudo ip route add 0.0.0.0/1 via " + vpn_gw);
-                            run_command("sudo ip route add 128.0.0.0/1 via " + vpn_gw);
+                        // === FIX 3: SET MTU 1280 ===
+                        run_command("sudo ip link set dev " + g_state->tun->get_name() + " mtu 1280");
+                        // ===========================
+
+                        run_command("sudo ip addr add " + g_state->assigned_ip + "/24 dev " + g_state->tun->get_name());
+                        run_command("sudo ip link set " + g_state->tun->get_name() + " up");
+                        run_command("sudo ip route add " + g_state->server_resolved_ip + " via " + g_state->original_gateway_ip);
+                        run_command("sudo ip route add 0.0.0.0/1 via " + vpn_gw);
+                        run_command("sudo ip route add 128.0.0.0/1 via " + vpn_gw);
                         #endif
                         g_state->connection_status = AppState::Status::CONNECTED;
                     }

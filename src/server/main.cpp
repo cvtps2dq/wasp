@@ -152,37 +152,29 @@ void configure_networking() {
     // 1. Assign IP
     run_command("ip addr add " + app.tun_ip + "/" + app.tun_cidr + " dev " + app.tun_name);
 
-    // 2. Set MTU (Safe value for wrapping overhead)
-    run_command("ip link set dev " + app.tun_name + " mtu 1400");
+    // === FIX 1: LOWER MTU TO 1280 (Safe minimum for VPNs) ===
+    run_command("ip link set dev " + app.tun_name + " mtu 1280");
 
     // 3. Bring Up
     run_command("ip link set " + app.tun_name + " up");
 
-    // 4. Enable IP Forwarding (Critical for VPN)
+    // 4. IP Forwarding
     run_command("sysctl -w net.ipv4.ip_forward=1");
 
+    // 5. NAT (Masquerading)
     std::string wan_iface = get_wan_interface();
-    if (wan_iface.empty()) {
-        log(LogLevel::ERROR, "Could not determine WAN interface. NAT/Masquerading will fail.");
-    } else {
+    if (!wan_iface.empty()) {
         log(LogLevel::INFO, "Using '" + wan_iface + "' as WAN interface for NAT.");
-        // 1. Masquerade: Rewrite VPN source IPs to the server's public IP
         run_command("iptables -t nat -A POSTROUTING -o " + wan_iface + " -j MASQUERADE");
-
-        // 2. Forwarding Rule: Allow packets from our VPN subnet to be forwarded
         run_command("iptables -A FORWARD -i " + app.tun_name + " -j ACCEPT");
-
-        // 3. Forwarding Rule: Allow established connections to send replies back into the VPN
         run_command("iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT");
     }
 
-    // 6. Disable Hardware Offloading on TUN (Critical for Checksums)
-    // Even though our code fixes checksums, it's good practice to tell the kernel.
-    run_command("ethtool -K " + app.tun_name + " tx off sg off tso off > /dev/null 2>&1");
+    // === FIX 2: DISABLE ALL OFFLOADING (GRO/LRO CAUSES STALLS) ===
+    // We disable: tx (transmit checksum), sg (scatter-gather), tso (tcp segmentation),
+    // gro (generic receive offload), gso (generic segmentation offload).
+    run_command("ethtool -K " + app.tun_name + " tx off sg off tso off gro off gso off > /dev/null 2>&1");
 
-#elif defined(__APPLE__)
-    // For Dev/Testing on Mac Server
-    run_command("ifconfig " + app.tun_name + " " + app.tun_ip + " " + app.tun_ip + " up");
 #endif
 
     log(LogLevel::SUCCESS, "Networking Configured. Listening on " + app.tun_ip);
