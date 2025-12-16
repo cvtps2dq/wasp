@@ -129,11 +129,9 @@ void cleanup_routing() {
         }
 
         // === FLOW CONTROL (BACKPRESSURE) ===
-        // If we have too many packets waiting to be sent, stop reading from TUN.
-        // This prevents memory ballooning and allows the network to catch up.
-        // 500 packets * ~1400 bytes = ~700KB buffered.
-        if (g_state->workers->results.size() > 500) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (g_state->workers->results.size() > 2000) {
+            // Yield CPU slice but stay ready (latency < 1ms)
+            std::this_thread::yield();
             continue;
         }
         // ===================================
@@ -311,22 +309,18 @@ int callback_sting(struct lws *wsi, enum lws_callback_reasons reason,
 
             // 2. Encrypted Data with Flow Control
             CryptoResult res;
-
-            // Keep sending as long as we have data AND the socket isn't full
+            // Keep sending as long as (1) We have data AND (2) Socket buffer has space
             while (!lws_send_pipe_choked(wsi) && g_state->workers->results.try_pop(res)) {
                 if (res.is_encrypted) {
+                    // Send to WebSocket
                     int n = lws_write(wsi, res.data.data() + LWS_PRE, res.data.size() - LWS_PRE, LWS_WRITE_BINARY);
-
-                    if (n < 0) {
-                        log_dual(LogLevel::ERROR, "Write failed - closing connection");
-                        return -1; // Socket dead
-                    }
+                    if (n < 0) return -1; // Handle socket error
 
                     g_state->bytes_sent += (res.data.size() - LWS_PRE);
                 }
             }
 
-            // If we still have data but stopped because of choke or burst limit, ask for callback again
+            // If we still have data (stopped because pipe choked), ask for callback ASAP
             if (!g_state->workers->results.empty()) {
                 lws_callback_on_writable(wsi);
             }

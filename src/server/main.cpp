@@ -200,7 +200,8 @@ void tun_reader_thread() {
         // it means we are reading from TUN faster than we can write to Clients.
         // Sleep briefly to let LWS/Clients catch up.
         if (app.workers->results.size() > 2000) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // Yield CPU slice but stay ready (latency < 1ms)
+            std::this_thread::yield();
             continue;
         }
         // ===================================
@@ -350,8 +351,9 @@ static int callback_wasp(struct lws *wsi, enum lws_callback_reasons reason,
 
             // 2. Encrypted Tunnel Data
             // === FLOW CONTROL FIX ===
+            // 2. Encrypted Tunnel Data
             if (!pss->encrypted_tx_queue.empty()) {
-                // Keep sending as long as we have packets AND socket buffer has space
+                // UNCAP BURST: Send until pipe choked
                 while (!pss->encrypted_tx_queue.empty() && !lws_send_pipe_choked(wsi)) {
                     auto& pkt = pss->encrypted_tx_queue.front();
 
@@ -362,7 +364,6 @@ static int callback_wasp(struct lws *wsi, enum lws_callback_reasons reason,
                     pss->encrypted_tx_queue.pop();
                 }
 
-                // If we stopped because pipe choked, request callback to resume later
                 if (!pss->encrypted_tx_queue.empty()) {
                     lws_callback_on_writable(wsi);
                 }
